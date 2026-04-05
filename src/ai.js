@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// החזרתי לגרסת הפרו שאהבת
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 async function analyzeSituation(messagesBuffer) {
@@ -18,13 +19,19 @@ async function analyzeSituation(messagesBuffer) {
     - These channels are generally very reliable. If you see a clear, official-sounding report of a missile launch or siren, prioritize speed.
     - Look for cross-references to validate vague reports.
     - Filter out general news, politics, UAVs/drones (focus strictly on missiles/rockets), or advertisements.
+
+    CRITICAL FORMATTING RULES:
+    - LANGUAGE RULE: The fields for the "source" (threatening country) and "target" MUST be written in Hebrew ONLY (e.g., "איראן", "לבנון", "תימן"). Do NOT output these in English.
+    - LOCATION RULE: The "target" field MUST start with one or more of the following exact districts: "ירושלים", "צפון", "יו״ש", "מרכז", "דרום".
+    - SPECIFIC LOCATIONS: After writing the district in the "target" field, you may add specific cities or areas in parentheses ONLY IF they are explicitly verified and mentioned in the source text.
+    - FORMAT EXAMPLES FOR TARGET: "מרכז (תל אביב, רמת גן)", "צפון, יו״ש", "דרום (שדרות)", "ירושלים".
     
     Return your decision EXCLUSIVELY as a valid JSON object with the following structure:
     {
-        "should_publish": true/false,
+        "should_publish": true,
         "reasoning": "Brief 1-sentence explanation of your decision (in English)",
-        "source": "Origin country/area (if known, else empty string)",
-        "target": "Target area in Israel (if known, else empty string)",
+        "source": "Origin country/area IN HEBREW ONLY (e.g. איראן, לבנון)",
+        "target": "District in Hebrew + Specifics IN HEBREW ONLY (e.g. מרכז (תל אביב))",
         "estimated_time": "Estimated arrival time (if specified, else empty string)"
     }
     Return ONLY raw JSON. No markdown, no additional text.
