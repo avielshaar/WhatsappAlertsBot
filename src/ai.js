@@ -3,7 +3,7 @@ require("dotenv").config();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // החזרתי לגרסת הפרו שאהבת
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
 
 async function analyzeSituation(messagesBuffer) {
     const contextText = messagesBuffer.map(msg => `- Channel ${msg.channel}: ${msg.text}`).join('\n');
