@@ -12,7 +12,7 @@ require("dotenv").config();
 const TELEGRAM_API_ID = parseInt(process.env.TELEGRAM_API_ID);
 const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH;
 // Parse channels, handling potential empty strings
-const ALERT_CHANNELS = process.env.ALERT_CHANNELS ? process.env.ALERT_CHANNELS.split(',').map(id => parseInt(id.trim())) : [];
+const ALERT_CHANNELS = process.env.ALERT_CHANNELS ? process.env.ALERT_CHANNELS.split(',').map(id => id.trim()) : [];
 const TARGET_WHATSAPP_GROUP = process.env.WHATSAPP_GROUPS;
 
 let whatsappGroupChat = null;
@@ -100,13 +100,15 @@ async function startTelegramClient() {
 
     console.log(`[Telegram] Starting to listen for messages in configured channels...`);
 
-    // Configuration for listening: If ALERT_CHANNELS has IDs, listen only to them. Otherwise, listen to all.
-    const eventConfig = ALERT_CHANNELS.length > 0 ? { chats: ALERT_CHANNELS } : {};
-
     telegramClient.addEventHandler(async (event) => {
         const messageText = event.message.message;
         const channelId = event.chatId;
         const now = Date.now();
+
+        // Manual filter — string comparison to avoid BigInt precision issues
+        if (ALERT_CHANNELS.length > 0 && !ALERT_CHANNELS.includes(String(channelId))) {
+            return;
+        }
 
         // -------------------------------------------------------------
         // TEST MODE: Log every received message and its channel ID
@@ -167,7 +169,7 @@ async function startTelegramClient() {
             console.log(`[AI] Reasoning: ${aiDecision?.reasoning || "None provided"}`);
         }
 
-    }, new NewMessage(eventConfig));
+    }, new NewMessage({}));
 }
 
 // ─── 3. Graceful Shutdown ───
