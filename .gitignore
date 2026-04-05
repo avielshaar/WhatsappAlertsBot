@@ -1,0 +1,5 @@
+.env
+.telegram_session
+.wwebjs_auth/
+.wwebjs_cache/
+node_modules/
