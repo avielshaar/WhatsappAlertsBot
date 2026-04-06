@@ -9,16 +9,21 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
 
 async function classifyMessage(channelId, messageText, lastPublished) {
+    const now = new Date();
+    // Generate current time string in Israel time zone
+    const currentTimeStr = now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
+
     const lastPublishedSection = lastPublished
         ? `LAST PUBLISHED ALERT (active context):
-- Source: ${lastPublished.source || "לא ידוע"}
-- Target: ${lastPublished.target || "לא ידוע"}
-- Estimated time: ${lastPublished.estimated_time || "לא ידוע"}
-- Published: ${Math.round((Date.now() - lastPublished.publishedAt) / 60000)} minutes ago`
+- Source: ${lastPublished.source || "Unknown"}
+- Target: ${lastPublished.target || "Unknown"}
+- Estimated time: ${lastPublished.estimated_time || "Unknown"}
+- Published: ${Math.round((now.getTime() - lastPublished.publishedAt) / 60000)} minutes ago`
         : `LAST PUBLISHED ALERT: None yet.`;
 
     const prompt = `
 You are an intelligence analyst monitoring missile/rocket threats to Israel.
+Current Israel Time: ${currentTimeStr}
 
 ${lastPublishedSection}
 
@@ -27,41 +32,17 @@ Analyze this Telegram message (in Hebrew) from channel "${channelId}":
 
 Classify into exactly ONE category:
 
-LAUNCH_REPORT — The message reports a missile/rocket launch that is CURRENTLY HAPPENING or IMMINENT (happening right now, sirens active now, missiles in the air now). The launch must be ongoing or just began.
+LAUNCH_REPORT — The message reports a NEW missile/rocket launch that is CURRENTLY HAPPENING or IMMINENT. 
 
-UPDATE_TO_LAST — Provides NEW specific details (more precise target city, estimated arrival time) about the LAST PUBLISHED alert. Only valid if there IS a last published alert and the new detail is not already in it.
+UPDATE_TO_LAST — Provides NEW specific details (more precise target city, estimated arrival time) about the LAST PUBLISHED alert OR an ongoing attack. If the source matches the LAST PUBLISHED alert and it's within the last 15 minutes, it is an UPDATE_TO_LAST.
 
-IRRELEVANT — Everything else, including:
-  - Messages about events that ALREADY HAPPENED (past tense: "was launched", "hit", "fell", "exploded")
-  - Damage reports, casualties, rescue operations
-  - Interception reports ("intercepted", "iron dome activated")
-  - Reports from hours or minutes ago that already occurred
-  - Cluster munition behavior descriptions
-  - UAV/drone reports (not missiles/rockets)
-  - Advertisements, promotional posts
-  - General news, politics
-  - Calls to submit footage
-  - "Seek shelter" without a current launch source
-  - Repetition of already-published info
+IRRELEVANT — Everything else (past events, damage, interceptions, "seek shelter" without specifics, spam, links, drones).
 
-CRITICAL RULES:
-- PAST TENSE = IRRELEVANT. If the event already occurred, it is NOT a LAUNCH_REPORT.
-- "A missile hit..." = IRRELEVANT (past, already happened)
-- "Sirens sounded in..." with past tense = IRRELEVANT
-- "Launch detected from Iran" in present/real-time = LAUNCH_REPORT
-- Drones/UAVs = IRRELEVANT always
-- If unsure between LAUNCH_REPORT and IRRELEVANT, choose IRRELEVANT
-
-For event_key: use English lowercase only. Format: "source->target_district"
-- source examples: "iran", "lebanon", "yemen", "gaza"
-- target_district examples: "merkaz", "tzafon", "darom", "yerushalayim", "yosh"
-- If source unknown: "->tzafon"
-- If target unknown: "iran->"
-- If both unknown: "->"
+CRITICAL RULES FOR TIME:
+1. If the message mentions a relative time (e.g. "בעוד 5 דקות", "in 10 minutes", "5 minutes remaining"), you MUST add that to the Current Israel Time (${currentTimeStr}) and output ONLY the absolute time in HH:MM format (e.g. "15:46").
+2. Never output words like "minutes" or "דקות" in the estimated_time field.
 
 For target field: MUST start with Hebrew district: ירושלים, צפון, יו״ש, מרכז, דרום
-- Add specific cities in parentheses ONLY if explicitly mentioned
-- Empty string if target not mentioned
 
 Return ONLY raw JSON, no markdown:
 {
@@ -70,7 +51,7 @@ Return ONLY raw JSON, no markdown:
   "event_key": "source->target or empty string if not LAUNCH_REPORT",
   "source": "Hebrew country name (e.g. איראן, לבנון), empty string if unknown",
   "target": "Hebrew district + optional cities, empty string if unknown",
-  "estimated_time": "Estimated arrival time if explicitly mentioned, else empty string"
+  "estimated_time": "Absolute arrival time (HH:MM) if explicitly mentioned, else empty string"
 }
 `;
 
@@ -92,9 +73,9 @@ async function checkForNewInfo(newMessages, lastPublished) {
 You are an intelligence analyst. An alert was already published for a missile/rocket launch.
 
 ALREADY PUBLISHED:
-- Source: ${lastPublished.source || "לא ידוע"}
-- Target: ${lastPublished.target || "לא ידוע"}
-- Estimated time: ${lastPublished.estimated_time || "לא ידוע"}
+- Source: ${lastPublished.source || "Unknown"}
+- Target: ${lastPublished.target || "Unknown"}
+- Estimated time: ${lastPublished.estimated_time || "Unknown"}
 - Published: ${Math.round((Date.now() - lastPublished.publishedAt) / 60000)} minutes ago
 
 NEW MESSAGES (confirmed by multiple channels):
