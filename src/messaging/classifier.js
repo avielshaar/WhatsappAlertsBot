@@ -6,7 +6,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { log } = require("../logger");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
+const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" }); // Note: Used standard flash model name
 
 async function classifyMessage(channelId, messageText, lastPublished) {
     const now = new Date();
@@ -31,18 +31,19 @@ Analyze this Telegram message (in Hebrew) from channel "${channelId}":
 "${messageText}"
 
 Classify into exactly ONE category:
-
 LAUNCH_REPORT — The message reports a NEW missile/rocket launch that is CURRENTLY HAPPENING or IMMINENT. 
-
-UPDATE_TO_LAST — Provides NEW specific details (more precise target city, estimated arrival time) about the LAST PUBLISHED alert OR an ongoing attack. If the source matches the LAST PUBLISHED alert and it's within the last 15 minutes, it is an UPDATE_TO_LAST.
-
+UPDATE_TO_LAST — Provides NEW specific details (more precise target city, estimated arrival time) about the LAST PUBLISHED alert.
 IRRELEVANT — Everything else (past events, damage, interceptions, "seek shelter" without specifics, spam, links, drones).
 
-CRITICAL RULES FOR TIME:
-1. If the message mentions a relative time (e.g. "בעוד 5 דקות", "in 10 minutes", "5 minutes remaining"), you MUST add that to the Current Israel Time (${currentTimeStr}) and output ONLY the absolute time in HH:MM format (e.g. "15:46").
-2. Never output words like "minutes" or "דקות" in the estimated_time field.
+CRITICAL RULES FOR TIME (estimated_time field):
+1. If the message mentions a relative time (e.g., "בעוד 10 דקות", "עשר דקות", "in 5 minutes"), YOU MUST DO THE MATH. Add the minutes to the Current Israel Time (${currentTimeStr}).
+2. Output ONLY the absolute arrival time in strictly HH:MM format (e.g., "16:41").
+3. Do NOT output words like "דקות" or "minutes".
 
-For target field: MUST start with Hebrew district: ירושלים, צפון, יו״ש, מרכז, דרום
+CRITICAL RULES FOR TARGET (target field):
+1. Use ONLY base names without the prefix "ה" (e.g., write "מרכז", NOT "המרכז").
+2. Separate multiple regions with a COMMA ONLY (e.g., "מרכז, דרום"). Do NOT use "ו" or "וגם".
+3. Do NOT split sub-regions or cities that are in parentheses. Keep them together exactly as written (e.g., "מרכז (שפלה)").
 
 Return ONLY raw JSON, no markdown:
 {
@@ -50,8 +51,8 @@ Return ONLY raw JSON, no markdown:
   "reasoning": "One sentence in English",
   "event_key": "source->target or empty string if not LAUNCH_REPORT",
   "source": "Hebrew country name (e.g. איראן, לבנון), empty string if unknown",
-  "target": "Hebrew district + optional cities, empty string if unknown",
-  "estimated_time": "Absolute arrival time (HH:MM) if explicitly mentioned, else empty string"
+  "target": "Comma-separated Hebrew districts/cities, empty string if unknown",
+  "estimated_time": "Absolute arrival time (HH:MM) calculated from Current Time, else empty string"
 }
 `;
 
@@ -70,36 +71,29 @@ async function checkForNewInfo(newMessages, lastPublished) {
     const contextText = newMessages.map(m => `- Channel ${m.channel}: ${m.text}`).join('\n');
 
     const prompt = `
-You are an intelligence analyst. An alert was already published for a missile/rocket launch.
+You are an intelligence analyst. An alert was already published.
 
 ALREADY PUBLISHED:
 - Source: ${lastPublished.source || "Unknown"}
 - Target: ${lastPublished.target || "Unknown"}
 - Estimated time: ${lastPublished.estimated_time || "Unknown"}
-- Published: ${Math.round((Date.now() - lastPublished.publishedAt) / 60000)} minutes ago
 
-NEW MESSAGES (confirmed by multiple channels):
+NEW MESSAGES:
 ${contextText}
 
-Do these messages contain genuinely NEW information vs what was already published?
-NEW = one of:
-1. A more specific or different target area not in the published alert
-2. An estimated arrival time not previously published
-3. Clear evidence this is a DIFFERENT launch event entirely (different source, or clearly separate incident)
+Do these messages contain genuinely NEW tactical information vs what was already published?
+NEW = A more specific target area, or a new estimated arrival time.
+NOT NEW = Repetition, damage reports, interception reports, or rephrasing the exact same regions.
 
-NOT NEW:
-- Repetition of same info
-- Damage/aftermath/rescue reports
-- Interception reports
-- Same event rephrased differently
+CRITICAL: Separate target regions with a COMMA ONLY. No "ו" (and).
 
 Return ONLY raw JSON, no markdown:
 {
   "has_new_info": true or false,
   "reasoning": "One sentence in English",
-  "source": "IN HEBREW — updated if changed, else same as published",
-  "target": "IN HEBREW — updated if changed, else same as published",
-  "estimated_time": "Updated if new, else same as published"
+  "source": "Hebrew — updated if changed",
+  "target": "Hebrew — updated if changed",
+  "estimated_time": "Updated if new in HH:MM format, else same as published"
 }
 `;
 
