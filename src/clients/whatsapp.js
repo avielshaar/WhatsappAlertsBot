@@ -53,7 +53,7 @@ async function sendAlert(source, target, estimated_time) {
         `📍 *מקור:* ${source          || "לא ידוע"}\n` +
         `🎯 *יעד:* ${target            || "לא ידוע"}\n` +
         `⏱️ *זמן משוער:* ${estimated_time || "לא ידוע"}\n\n` +
-        `⏱️ *להצטרפות להתרעות לפני פיקוד העורף:* https://chat.whatsapp.com/GuyC5q1jjOc3cKTJj3gYn6?mode=gi_t`;
+        `⏱️ *להתרעות לפני פיקוד העורף:* https://chat.whatsapp.com/GuyC5q1jjOc3cKTJj3gYn6?mode=gi_t`;
 
     try {
         await whatsappGroupChat.sendMessage(alertMsg);
@@ -84,7 +84,7 @@ async function sendUpdate(updatedFields, prevPublished, updateType) {
         `📍 *מקור:* ${updatedFields.source          || prevPublished.source || "לא ידוע"}\n` +
         `🎯 *יעד:* ${updatedFields.target            || prevPublished.target || "לא ידוע"}\n` +
         `⏱️ *זמן משוער:* ${updatedFields.estimated_time || prevPublished.estimated_time || "לא ידוע"}\n\n` +
-        `⏱️ *להצטרפות להתרעות לפני פיקוד העורף:* https://chat.whatsapp.com/GuyC5q1jjOc3cKTJj3gYn6?mode=gi_t`;
+        `⏱️ *להתרעות לפני פיקוד העורף:* https://chat.whatsapp.com/GuyC5q1jjOc3cKTJj3gYn6?mode=gi_t`;
 
     try {
         await whatsappGroupChat.sendMessage(alertMsg);

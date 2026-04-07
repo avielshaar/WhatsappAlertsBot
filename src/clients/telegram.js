@@ -43,10 +43,10 @@ async function startTelegramClient(callbacks) {
             const msgs = await telegramClient.getMessages(id, { limit: 1 });
             if (msgs && msgs.length > 0) {
                 lastSeenMessageIds[id] = msgs[0].id;
-                log(`✅ Tracking initialized for ID: ${id}`);
+                log(`[Telegram] ✅ Tracking initialized for ID: ${id}`);
             }
         } catch (err) {
-            log(`❌ Could not fetch initial data for ${id}`);
+            log(`[Telegram] ❌ Could not fetch initial data for ${id}`);
         }
         await sleep(300);
     }
@@ -58,28 +58,37 @@ async function startTelegramClient(callbacks) {
 async function startPolling(callbacks) {
     (async () => {
         while (true) {
-            for (let id of ALERT_CHANNELS) {
-                if (!id) continue;
-                try {
-                    const msgs = await telegramClient.getMessages(id, { limit: 1 });
-                    if (msgs && msgs.length > 0) {
-                        const latestMsg = msgs[0];
-                        const msgText   = latestMsg.message;
+            try {
+                for (let id of ALERT_CHANNELS) {
+                    if (!id) continue;
+                    try {
+                        const msgs = await telegramClient.getMessages(id, { limit: 1 });
+                        if (msgs && msgs.length > 0) {
+                            const latestMsg = msgs[0];
+                            const msgText   = latestMsg.message;
 
-                        if (latestMsg.id > (lastSeenMessageIds[id] || 0)) {
-                            lastSeenMessageIds[id] = latestMsg.id;
-                            if (msgText) {
-                                log(`[POLLING] 🚨 NEW MESSAGE | Channel: ${id}`);
-                                await processMessage(id, msgText, callbacks);
+                            if (latestMsg.id > (lastSeenMessageIds[id] || 0)) {
+                                lastSeenMessageIds[id] = latestMsg.id;
+                                if (msgText) {
+                                    log(`[POLLING] 🚨 NEW MESSAGE | Channel: ${id}`);
+                                    await processMessage(id, msgText, callbacks);
+                                }
                             }
                         }
+                    } catch (err) {
+                        if (err.message && err.message.includes("FLOOD")) {
+                            await sleep(5000);
+                        } else {
+                            log(`[Telegram] ⚠️ Minor error fetching channel ${id}: ${err.message}`);
+                        }
                     }
-                } catch (err) {
-                    if (err.message && err.message.includes("FLOOD")) await sleep(5000);
+                    await sleep(300);
                 }
-                await sleep(300);
+                await sleep(1000);
+            } catch (fatalErr) {
+                log(`[Telegram] ❌ Fatal error in polling loop: ${fatalErr.message}. Retrying in 5s...`);
+                await sleep(5000);
             }
-            await sleep(1000);
         }
     })();
 }
