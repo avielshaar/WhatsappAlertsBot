@@ -1,136 +1,214 @@
 /**
- * Message Classification Module
+ * Deterministic Message Classification Module (Non-AI)
  */
 
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { log } = require("../logger");
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const STRICT_BLACKLIST = [
+    "חזלש", "חזל\"ש", "שווא", "תרגיל", "יירוט מוצלח", "יורטו", "יורט", 
+    "הוסר החשש", "אין סכנה", "נפילה", "שריפה", "נפגעים", "פצועים", 
+    "הרוגים", "כשל", "נפל בים", "כטב\"ם", "כטבם", "רחפן", "חדירת כלי טיס"
+];
 
-// Primary fast model (High daily quota - 500)
-const primaryModel = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
+const LAUNCH_WHITELIST = [
+    "שיגור", "שיגורים", "ירי", "מטח", "מטחים", "טילים", "רקטות", 
+    "בדרך ל", "לעבר", "התרעה", "אזעקה", "התרעות", "הופעלו", "אישור", "דיווח"
+];
 
-// High-tier stable fallback model (Low daily quota - 20)
-const fallbackModel = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
+const SOURCES = ["איראן", "לבנון", "סוריה", "תימן", "עיראק", "עזה"];
 
-/**
- * Helper function to call AI with automatic fallback on 503 errors
- */
-async function generateWithFallback(prompt) {
-    try {
-        const result = await primaryModel.generateContent(prompt);
-        return result.response.text();
-    } catch (err) {
-        if (err.message.includes("503") || err.message.includes("high demand") || err.message.includes("Unavailable")) {
-            log(`[AI] ⚠️ Primary model 503 overload. Instantly falling back to gemini-3-flash...`);
-            const fallbackResult = await fallbackModel.generateContent(prompt);
-            return fallbackResult.response.text();
+const REGION_MAP = [
+    { base: "מרכז", aliases: ["מרכז", "גוש דן", "תל אביב", "ת\"א", "הרצליה"] },
+    { base: "דרום", aliases: ["דרום", "עוטף", "באר שבע", "ב\"ש", "אשדוד", "אשקלון"] },
+    { base: "צפון", aliases: ["צפון", "קריות", "עכו", "נהריה", "צפת", "טבריה", "מירון"] },
+    { base: "ירושלים", aliases: ["ירושלים", "י-ם"] },
+    { base: "יו\"ש", aliases: ["יו\"ש", "יו״ש", "יהודה ושומרון", "שומרון", "בנימין"] },
+    { base: "שרון", aliases: ["שרון", "נתניה", "חדרה"] },
+    { base: "שפלה", aliases: ["שפלה", "ראשון לציון", "רחובות", "ראשל\"צ"] },
+    { base: "אילת", aliases: ["אילת", "העיר אילת"] },
+    { base: "חיפה", aliases: ["חיפה", "מפרץ חיפה"] },
+    { base: "ערבה", aliases: ["ערבה"] },
+    { base: "נגב", aliases: ["נגב"] },
+    { base: "גליל", aliases: ["גליל", "גליל עליון", "גליל מערבי"] },
+    { base: "גולן", aliases: ["גולן", "רמת הגולן"] }
+];
+
+function mergeAndCleanTargets(oldStr, newStr) {
+    const arr1 = (oldStr || "").split(",").map(s => s.trim()).filter(Boolean);
+    const arr2 = (newStr || "").split(",").map(s => s.trim()).filter(Boolean);
+    let merged = [...new Set([...arr1, ...arr2])];
+    
+    // סינון כפילויות אגרסיבי: משאיר אזור רק אם הוא לא מוכל באף אזור אחר
+    merged = merged.filter(item => {
+        return !merged.some(other => other !== item && other.includes(item));
+    });
+    
+    return merged.sort().join(", ");
+}
+
+function extractSource(text) {
+    for (const src of SOURCES) {
+        const regex = new RegExp(`(?<![\\u0590-\\u05FF])(?:מ|מ-|מאזור\\s|מכיוון\\s)?ה?${src}(?![\\u0590-\\u05FF])`);
+        if (regex.test(text)) {
+            return src;
         }
-        throw err;
     }
+    return "";
+}
+
+function extractTargets(text) {
+    const found = [];
+    for (const region of REGION_MAP) {
+        for (const alias of region.aliases) {
+            const safeAlias = alias.replace(/"/g, '["״]');
+            const regexStr = `(?<![\\u0590-\\u05FF])(?:ו|ול)?(?:ל|ל-|ב|ב-|לעבר\\s|לאזור\\s|באזור\\s|אזור\\s|לכיוון\\s|אל\\s)*ה?${safeAlias}(?![\\u0590-\\u05FF])(?:\\s*\\([^)]+\\))?`;
+            const regex = new RegExp(regexStr);
+            const match = text.match(regex);
+            
+            if (match) {
+                const parenMatch = match[0].match(/\(([^)]+)\)/);
+                const parenSuffix = parenMatch ? ` (${parenMatch[1]})` : "";
+                found.push(region.base + parenSuffix);
+                break;
+            }
+        }
+    }
+    return mergeAndCleanTargets("", found.join(", "));
+}
+
+function extractTime(text) {
+    const now = new Date();
+    
+    const absMatch = text.match(/(?<!\d)([0-1]?[0-9]|2[0-3]):([0-5][0-9])(?!\d)/);
+    if (absMatch) {
+        return `${absMatch[1].padStart(2, '0')}:${absMatch[2]}`;
+    }
+
+    const relMatch = text.match(/(?:בעוד|עוד|בתוך|תוך|יגיעו ב|זמן הגעה)?\s*(?:כ-|-)?(\d+|עשר|חמש|חמישה|רבע|עשרים|חצי)\s*(דקות|שעה)/);
+    if (relMatch) {
+        let numStr = relMatch[1];
+        let unit = relMatch[2];
+        let mins = parseInt(numStr);
+        
+        const numMap = {"עשר": 10, "חמש": 5, "חמישה": 5, "רבע": 15, "עשרים": 20, "חצי": 30};
+        if (isNaN(mins)) mins = numMap[numStr] || 0;
+
+        if (unit === "שעה" && numStr === "חצי") mins = 30;
+        else if (unit === "שעה" && numStr === "רבע") mins = 15;
+
+        if (mins > 0) {
+            now.setMinutes(now.getMinutes() + mins);
+            return now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
+        }
+    }
+    return "";
 }
 
 async function classifyMessage(channelId, messageText, lastPublished) {
-    const now = new Date();
-    const currentTimeStr = now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
+    const text = messageText;
 
-    const lastPublishedSection = lastPublished
-        ? `LAST PUBLISHED ALERT (active context):
-- Source: ${lastPublished.source || "Unknown"}
-- Target: ${lastPublished.target || "Unknown"}
-- Estimated time: ${lastPublished.estimated_time || "Unknown"}
-- Published: ${Math.round((now.getTime() - lastPublished.publishedAt) / 60000)} minutes ago`
-        : `LAST PUBLISHED ALERT: None yet.`;
-
-    const prompt = `
-You are an intelligence analyst monitoring missile/rocket threats to Israel.
-Current Israel Time: ${currentTimeStr}
-
-${lastPublishedSection}
-
-Analyze this Telegram message (in Hebrew) from channel "${channelId}":
-"${messageText}"
-
-Classify into exactly ONE category:
-LAUNCH_REPORT — The message reports a NEW missile/rocket launch that is CURRENTLY HAPPENING or IMMINENT. 
-UPDATE_TO_LAST — Provides NEW specific details (more precise target city, estimated arrival time) about the LAST PUBLISHED alert.
-IRRELEVANT — Everything else (past events, damage, interceptions, "seek shelter" without specifics, spam, links, drones).
-
-CRITICAL RULES FOR TIME (estimated_time field):
-1. If a relative time is explicitly mentioned (e.g., "בעוד 10 דקות", "in 5 minutes"), YOU MUST DO THE MATH. Add the minutes to the Current Israel Time (${currentTimeStr}) and output the absolute HH:MM.
-2. IF NO EXPLICIT ARRIVAL TIME IS MENTIONED, YOU MUST RETURN AN EMPTY STRING "".
-3. DO NOT output the "Current Israel Time" as the estimated time unless you mathematically calculated an addition to it.
-4. Output ONLY absolute arrival time in HH:MM format. No words like "minutes".
-
-CRITICAL RULES FOR TARGET (target field):
-1. Use EXACT base names only: ירושלים, צפון, יו״ש, מרכז, דרום.
-2. DO NOT add filler words like "אזור", "ה", or "לעבר" (e.g., write "מרכז", NOT "אזור המרכז").
-3. Separate multiple regions with a COMMA ONLY. Do NOT use "ו" or "וגם".
-4. Do NOT split sub-regions in parentheses. Keep them exactly as written (e.g., "מרכז (שפלה)").
-
-Return ONLY raw JSON, no markdown:
-{
-  "category": "LAUNCH_REPORT" or "UPDATE_TO_LAST" or "IRRELEVANT",
-  "reasoning": "One sentence in English",
-  "event_key": "source->target or empty string if not LAUNCH_REPORT",
-  "source": "Hebrew country name (e.g. איראן, לבנון), empty string if unknown",
-  "target": "Comma-separated exact Hebrew regions, empty string if unknown",
-  "estimated_time": "Absolute arrival time (HH:MM) calculated from Current Time, else empty string"
-}
-`;
-
-    try {
-        const text = await generateWithFallback(prompt);
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch (err) {
-        log("[AI] classifyMessage error: " + err.message);
+    if (STRICT_BLACKLIST.some(word => text.includes(word))) {
+        return { category: "IRRELEVANT", reasoning: "Blacklisted keyword.", event_key: "", source: "", target: "", estimated_time: "" };
     }
-    return { category: "IRRELEVANT", event_key: "", source: "", target: "", estimated_time: "", reasoning: "Error" };
+
+    const source = extractSource(text);
+    const target = extractTargets(text);
+    const estimatedTime = extractTime(text);
+
+    const hasLaunchWord = LAUNCH_WHITELIST.some(word => text.includes(word));
+    
+    if (!hasLaunchWord && !target && !source) {
+        if (!(estimatedTime && lastPublished)) {
+            return { category: "IRRELEVANT", reasoning: "No launch indicators found.", event_key: "", source: "", target: "", estimated_time: "" };
+        }
+    }
+
+    if (lastPublished && (lastPublished.source || lastPublished.target)) {
+        const isDifferentSource = source && lastPublished.source && source !== lastPublished.source;
+        
+        if (!isDifferentSource) {
+            let mergedTargets = mergeAndCleanTargets(lastPublished.target, target);
+            let isNewTarget = target && mergedTargets !== lastPublished.target;
+            const isNewTime = estimatedTime && estimatedTime !== lastPublished.estimated_time;
+
+            if (isNewTarget || isNewTime) {
+                return {
+                    category: "UPDATE_TO_LAST",
+                    source: source || lastPublished.source,
+                    target: mergedTargets,
+                    estimated_time: estimatedTime || lastPublished.estimated_time,
+                    reasoning: "New info extracted deterministically.",
+                    event_key: `${source || lastPublished.source}->${mergedTargets}`
+                };
+            }
+
+            if (target === lastPublished.target && (!estimatedTime || estimatedTime === lastPublished.estimated_time)) {
+                return { category: "IRRELEVANT", reasoning: "Duplicate info.", event_key: "", source: "", target: "", estimated_time: "" };
+            }
+        }
+    }
+
+    if (target || source) {
+        return {
+            category: "LAUNCH_REPORT",
+            source: source,
+            target: target,
+            estimated_time: estimatedTime,
+            reasoning: "Valid launch parameters extracted.",
+            event_key: `${source}->${target}`
+        };
+    }
+
+    return { category: "IRRELEVANT", reasoning: "Fell through logic.", event_key: "", source: "", target: "", estimated_time: "" };
 }
 
 async function checkForNewInfo(newMessages, lastPublished) {
-    const contextText = newMessages.map(m => `- Channel ${m.channel}: ${m.text}`).join('\n');
+    if (!lastPublished) return { has_new_info: false };
 
-    const prompt = `
-You are an intelligence analyst. An alert was already published.
-
-ALREADY PUBLISHED:
-- Source: ${lastPublished.source || "Unknown"}
-- Target: ${lastPublished.target || "Unknown"}
-- Estimated time: ${lastPublished.estimated_time || "Unknown"}
-
-NEW MESSAGES:
-${contextText}
-
-Do these messages contain genuinely NEW tactical information vs what was already published?
-NEW = A more specific target area, or a new estimated arrival time.
-NOT NEW = Repetition, damage reports, interception reports, or rephrasing the exact same regions.
-
-CRITICAL RULES FOR TARGET UPDATES:
-1. DO NOT add filler words like "אזור" or "ה".
-2. Separate regions with a COMMA ONLY. No "ו".
-3. Keep parentheses intact (e.g., "מרכז (שפלה)").
-4. ONLY update estimated_time if a NEW explicit timeframe is provided. NEVER default to the Current Israel Time.
-
-Return ONLY raw JSON, no markdown:
-{
-  "has_new_info": true or false,
-  "reasoning": "One sentence in English",
-  "source": "Hebrew — updated if changed",
-  "target": "Hebrew — updated if changed",
-  "estimated_time": "Updated if new in HH:MM format, else same as published"
-}
-`;
-
-    try {
-        const text = await generateWithFallback(prompt);
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch (err) {
-        log("[AI] checkForNewInfo error: " + err.message);
+    const combinedText = newMessages.map(m => m.text).join(" | ");
+    
+    if (STRICT_BLACKLIST.some(word => combinedText.includes(word))) {
+        return { has_new_info: false, reasoning: "Blacklisted keyword." };
     }
-    return { has_new_info: false, reasoning: "Error during analysis" };
+
+    const target = extractTargets(combinedText);
+    const estimatedTime = extractTime(combinedText);
+    const source = extractSource(combinedText);
+
+    // הגנה חזקה: אם המדינה השתנתה, אל תמזג עם האירוע הקודם! שדר מיד כדיווח חדש.
+    if (source && lastPublished.source && source !== lastPublished.source) {
+        return { 
+            has_new_info: true, 
+            source: source, 
+            target: target, 
+            estimated_time: estimatedTime, 
+            reasoning: "Different source, cross-event. Treating as new alert." 
+        };
+    }
+
+    let hasNew = false;
+    let finalTarget = lastPublished.target || "";
+    let finalTime = lastPublished.estimated_time || "";
+    let finalSource = lastPublished.source || "";
+
+    let mergedTargets = mergeAndCleanTargets(finalTarget, target);
+    if (target && mergedTargets !== finalTarget) {
+        hasNew = true;
+        finalTarget = mergedTargets;
+    }
+
+    if (estimatedTime && estimatedTime !== finalTime) {
+        hasNew = true;
+        finalTime = estimatedTime;
+    }
+
+    return {
+        has_new_info: hasNew,
+        source: source || finalSource,
+        target: finalTarget,
+        estimated_time: finalTime,
+        reasoning: hasNew ? "Deterministic logic found new info." : "No new actionable info."
+    };
 }
 
 module.exports = { classifyMessage, checkForNewInfo };

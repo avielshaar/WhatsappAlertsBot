@@ -101,7 +101,7 @@ function pickBestEvent(candidates) {
 async function processMessage(channelId, messageText, callbacks) {
     const now = Date.now();
 
-    const spamKeywords = ["להצטרפות", "לחצו כאן", "t.me", "פרסום", "לערוץ"];
+    const spamKeywords = ["פרסום"];
     if (spamKeywords.some(word => messageText.includes(word)) && messageText.length < 80) {
         log(`[Filter] ❌ Regex Spam Match — ignoring.`);
         return;
